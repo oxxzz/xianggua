@@ -1,9 +1,24 @@
 package main
 
-import "yuewen/store/svc/yuewen"
+import (
+	"fmt"
+	"yuewen/store/svc/yuewen"
+)
 
 func main() {
-	yuewen.SignIn(true)
+
+	fmt.Println(yuewen.SignIn(false))
+	// ips := viper.GetStringSlice("ips")
+	// slices.
+	// fmt.Println(ips)
+	// // for i := 0; i < 1; i++ {
+	// 	go func ()  {
+	// 		yuewen.SignIn(false)
+	// 	}()
+	// }
+
+	// time.Sleep(time.Minute)
+	
 	// if err != nil {
 	// 	panic(err)
 	// }
