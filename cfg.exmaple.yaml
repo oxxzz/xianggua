@@ -1,0 +1,19 @@
+ips: [127.0.0.1, 111.111.111.111]
+debug: true
+listen: 8080
+worker: 10
+
+mysql:
+  dsn: book:zMpGFJpbaXcWdnze@tcp(127.0.0.1:3306)/book?charset=utf8mb4&parseTime=True&loc=Local
+  pool:
+    idle: 5
+    open: 10
+    
+secret:
+  ak: 100000028
+  sk: yghjhgjhg
+
+yuewen:
+  cpid: 2000008660
+  user: xianggua
+  secret: 19904130yang@
