@@ -81,11 +81,11 @@ func SignIn(force bool) (string, error) {
 	}
 
 	if r.Code != 0 {
-		return "", fmt.Errorf("code: %d, msg: %s", r.Code, r.Message)
+		return "", fmt.Errorf("[YUEWEN.Login] code: %d, msg: %s", r.Code, r.Message)
 	}
 
 	key = r.Result.Key
-	logrus.WithField("KEY", key).Debugf("[YUEWEN] login success")
+	logrus.WithField("KEY", key).Debugf("[YUEWEN.Login] success")
 	return key, nil
 }
 
@@ -93,7 +93,7 @@ func SignIn(force bool) (string, error) {
 func PushBookInfo(b *origin.BInfo) (string, error) {
 	key, err := SignIn(false)
 	if err != nil {
-		return "", err
+		return "", errors.Wrapf(err, "[YUEWEN.PushBookInfo] login failed: %s", err.Error())
 	}
 
 	p := map[string]interface{}{
@@ -120,19 +120,19 @@ func PushBookInfo(b *origin.BInfo) (string, error) {
 	_, err = client.R().SetOutput(cover).Get(b.Cover)
 	if err != nil {
 		return "", errors.Wrap(err, fmt.Sprintf(
-			"book: %s, cover: %s, download failed", b.ID, b.Cover))
+			"[YUEWEN.PushBookInfo] book: %s, cover: %s, download failed", b.ID, b.Cover))
 	}
 
 	if _, err := os.Stat(cover); errors.Is(err, os.ErrNotExist) {
 		return "", errors.Wrap(err, fmt.Sprintf(
-			"book: %s, cover: %s, download failed", b.ID, b.Cover))
+			"[YUEWEN.PushBookInfo] book: %s, cover: %s, download failed", b.ID, b.Cover))
 	} 
 
 	_, err = client.R().SetBody(p).
 	SetFile("b.cover", cover).
 	SetResult(&r).Post(PushBook)
 	if err != nil {
-		return "", errors.Wrapf(err, "push book %s failed: %s", b.ID, err.Error())
+		return "", errors.Wrapf(err, "[YUEWEN.PushBookInfo] push book %s failed: %s", b.ID, err.Error())
 	}
 
 	defer os.RemoveAll(cover)
