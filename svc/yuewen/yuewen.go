@@ -13,7 +13,6 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 )
@@ -75,38 +74,44 @@ func SignIn(force bool) (string, error) {
 		} `json:"result"`
 	}
 	
-	_, err := client.R().SetBody(param.Encode()).SetResult(&r).Post(fmt.Sprintf(Login, u, secret))
-	if err != nil {
+	if _, err := client.R().SetBody(param.Encode()).SetResult(&r).Post(fmt.Sprintf(Login, u, secret)); err != nil {
 		return "", err
 	}
 
 	if r.Code != 0 {
-		return "", fmt.Errorf("[YUEWEN.Login] code: %d, msg: %s", r.Code, r.Message)
+		return "", fmt.Errorf("[YUEWEN.Login] invalid status. code: %d, msg: %s", r.Code, r.Message)
 	}
 
-	key = r.Result.Key
-	logrus.WithField("KEY", key).Debugf("[YUEWEN.Login] success")
-	return key, nil
+	return r.Result.Key, nil
 }
 
 // 2 Push book
 func PushBookInfo(b *origin.BInfo) (string, error) {
 	key, err := SignIn(false)
 	if err != nil {
-		return "", errors.Wrapf(err, "[YUEWEN.PushBookInfo] login failed: %s", err.Error())
+		return "", errors.Wrapf(err, "[YUEWEN.PushBookInfo] login failed")
 	}
 
-	p := map[string]interface{}{
+	free := 1
+	if b.Vip == 1 {
+		free = 0
+	}
+
+	p := map[string]string{
 		"key": key,
-		"b.cpid": viper.GetInt64("yuewen.cpid"),
-		"b.cpBid": cast.ToInt64(b.ID),
+		"b.cpid": viper.GetString("yuewen.cpid"),
+		"b.cpBid": b.ID,
 		"b.title ": b.Name,
 		"b.author ": b.Author,
-		"b.finish": b.Status,
+		"b.finish": cast.ToString(b.Status),
 		"b.intro ": b.Brief,
-		"b.sex ": "", // ?
-		"b.free ": cast.ToInt(b.Vip == 0),
-		"b.category": 0,
+		"b.free ": cast.ToString(free),
+		"b.language": "0",
+		"b.form": "0",
+		// "b.sex ": "性别属性", // ?
+		// "b.maxFreeChapter": "最大免费章节数",
+		// "b.wordPrice": "千字价格",
+		// "b.category": "分类",
 	}
 
 	var r struct {
@@ -116,9 +121,8 @@ func PushBookInfo(b *origin.BInfo) (string, error) {
 		} `json:"result"`
 	}
 
-	cover := strings.Join(strings.Split(os.TempDir(), b.ID + ".jpg"), "")
-	_, err = client.R().SetOutput(cover).Get(b.Cover)
-	if err != nil {
+	cover := strings.Join([]string{os.TempDir(), b.ID + ".jpg"}, "")
+	if _, err := client.R().EnableTrace().SetOutput(cover).Get(b.Cover); err != nil {
 		return "", errors.Wrap(err, fmt.Sprintf(
 			"[YUEWEN.PushBookInfo] book: %s, cover: %s, download failed", b.ID, b.Cover))
 	}
@@ -128,18 +132,83 @@ func PushBookInfo(b *origin.BInfo) (string, error) {
 			"[YUEWEN.PushBookInfo] book: %s, cover: %s, download failed", b.ID, b.Cover))
 	} 
 
-	_, err = client.R().SetBody(p).
-	SetFile("b.cover", cover).
-	SetResult(&r).Post(PushBook)
-	if err != nil {
-		return "", errors.Wrapf(err, "[YUEWEN.PushBookInfo] push book %s failed: %s", b.ID, err.Error())
+	defer os.RemoveAll(cover)
+	if _, err = client.R().SetFormData(p).SetFile("b.cover", cover).SetResult(&r).Post(PushBook) ;err != nil {
+		return "", errors.Wrapf(err, "[YUEWEN.PushBookInfo] push book %s failed", b.ID)
 	}
 
-	defer os.RemoveAll(cover)
-	fmt.Println(r)
-	return "", nil
+	if r.Code != 0 {
+		return "", fmt.Errorf("[YUEWEN.PushBookInfo] invalid status, code: %d, msg: %s", r.Code, r.Message)
+	}
+
+	return r.Result.ID, nil
 }
 
 // 2.1 Push chapter
+func PushChapter(bid string, c *origin.Chapter) error {
+	key, err := SignIn(false)
+	if err != nil {
+		return errors.Wrapf(err, "[YUEWEN.PushChapter] login failed")
+	}
+
+	p := map[string]interface{}{
+		"key": key,
+		"c.cpid": viper.GetInt64("yuewen.cpid"),
+		"c.bookid": cast.ToInt64(bid),
+		"c.title ": c.Name,
+		"c.content ": c.Content,
+		"c.cpcid": c.ID,
+	}
+
+	var r struct {
+		resp
+		Result struct {
+			ID string `json:"bookid"`
+		} `json:"result"`
+	}
+
+	if _, err = client.R().SetBody(p).SetResult(&r).Post(PushChaoter); err != nil {
+		return errors.Wrapf(err, "[YUEWEN.PushChapter] push chapter %s.%s failed", bid, c.ID)
+	}
+
+	if r.Code != 0 {
+		return fmt.Errorf("[YUEWEN.PushChapter] code: %d, msg: %s", r.Code, r.Message)
+	}
+
+	return nil
+}
 // 2.2 Fetch chapter status
 // 2.3 Update chapter
+func PatchChapter(bid string, c *origin.Chapter) error {
+	key, err := SignIn(false)
+	if err != nil {
+		return errors.Wrapf(err, "[YUEWEN.PatchChapter] login failed")
+	}
+
+	p := map[string]interface{}{
+		"key": key,
+		"c.cpid": viper.GetInt64("yuewen.cpid"),
+		"c.bookid": cast.ToInt64(bid),
+		"c.title ": c.Name,
+		"c.content ": c.Content,
+		"c.chapterid": c.YWID,
+		"c.cpcid": c.ID,
+	}
+
+	var r struct {
+		resp
+		Result struct {
+			ID string `json:"bookid"`
+		} `json:"result"`
+	}
+
+	if _, err = client.R().SetBody(p).SetResult(&r).Post(PushChaoter); err != nil {
+		return errors.Wrapf(err, "[YUEWEN.PatchChapter] push chapter %s.%s failed", bid, c.ID)
+	}
+
+	if r.Code != 0 {
+		return fmt.Errorf("[YUEWEN.PatchChapter] code: %d, msg: %s", r.Code, r.Message)
+	}
+
+	return nil
+}

@@ -3,23 +3,25 @@ package origin
 import (
 	"crypto/md5"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
+	"yuewen/store/db"
 
+	"github.com/go-resty/resty/v2"
+	"github.com/pkg/errors"
+	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 )
 
-var client = http.Client{
+var client = resty.NewWithClient(&http.Client{
 	Transport: &http.Transport{
 		MaxIdleConns:        10,
 		MaxIdleConnsPerHost: 10,
 	},
-}
+})
 
-type resp struct {
+type oResp struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 }
@@ -28,59 +30,35 @@ func sign() string {
 	today := time.Now().Format("20060102")
 	h := md5.New()
 	h.Write([]byte(today + viper.GetString("secret.ak") + viper.GetString("secret.sk")))
-	s := hex.EncodeToString(h.Sum(nil))
-
-	return s
+	
+	return hex.EncodeToString(h.Sum(nil))
 }
 
-//	{
-//	  "bookId": "282",
-//	  "book_name": "试传文件22",
-//	  "update_time": "1510992075"
-//	}
 type Book struct {
 	ID        string `json:"bookId"`
 	Name      string `json:"book_name"`
 	UpdatedAt string `json:"update_time"`
 }
 
+// Books returns all book id list
 func Books() ([]*Book, error) {
 	url := fmt.Sprintf("http://www.xiangguayuedu.cn/apis/api/BookList.php?sid=%s&sign=%s", viper.GetString("secret.ak"), sign())
-	r, err := client.Get(url)
-	if err != nil {
-		return nil, err
-	}
 
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	var resp struct {
-		resp
+	var r struct {
+		oResp 
 		Data []*Book `json:"data"`
 	}
-
-	if err := decoder.Decode(&resp); err != nil {
-		return nil, err
+	if _, err := client.R().SetResult(&r).Get(url); err != nil {
+		return nil, errors.Wrapf(err, "[ORIGIN.Books] send request failed")
 	}
 
-	if resp.Code != 200 {
-		return nil, fmt.Errorf("code: %d, msg: %s", resp.Code, resp.Msg)
+	if r.Code != 200 {
+		return nil, fmt.Errorf("[ORIGIN.Books] invalid status, code: %d, msg: %s", r.Code, r.Msg)
 	}
 
-	return resp.Data, nil
+	return r.Data, nil
 }
 
-// "bookId": "61",
-// "book_name": "这是一本测试小说",
-// "author": "测试作者",
-// "brief": "测试简介”",
-// "words": "710092",
-// "keywords": "",
-// "cover": "http://www.xiangguayuedu.cn/images/nocover.jpg",
-// "group_id": "1008",
-// "cate_id": "1008002",
-// "is_vip": 1,
-// "update_time": "1542770256",
-// "status": 1
 type BInfo struct {
 	ID       string `json:"bookId"`
 	Name     string `json:"book_name"`
@@ -95,84 +73,75 @@ type BInfo struct {
 	Status   int    `json:"status"`
 }
 
+// Info returns book info by id
 func Info(id string) (*BInfo, error) {
 	url := "http://www.xiangguayuedu.cn/apis/api/BookInfo.php?sid=%s&sign=%s&bookid=%s"
-	r, err := client.Get(fmt.Sprintf(url, viper.GetString("secret.ak"), sign(), id))
-	if err != nil {
-		return nil, err
-	}
-
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	var resp struct {
-		resp
+	var r struct {
+		oResp
 		Data *BInfo `json:"data"`
 	}
 
-	if err := decoder.Decode(&resp); err != nil {
-		return nil, err
+	if _, err := client.R().SetResult(&r).Get(fmt.Sprintf(url, viper.GetString("secret.ak"), sign(), id)); err != nil {
+		return nil, errors.Wrapf(err, "[ORIGIN.Info] send request failed")
 	}
 
-	if resp.Code != 200 {
-		return nil, fmt.Errorf("code: %d, msg: %s", resp.Code, resp.Msg)
+	if r.Code != 200 {
+		return nil, fmt.Errorf("[ORIGIN.Info] invalid status. code: %d, msg: %s", r.Code, r.Msg)
 	}
 
-	return resp.Data, nil
+	return r.Data, nil
 }
-
-// {
-//   "chapter_id": "4012",
-//   "chapter_name": "第一章 故人1",
-//   "update_time": "1542770186",
-//   "is_vip": 0
-// }
 
 type Chapter struct {
 	ID        string `json:"chapter_id"`
+	// ID on YUEWEN side, used to update chapter
+	YWID      string 
 	Name      string `json:"chapter_name"`
 	UpdatedAt string `json:"update_time"`
+	// Content is not returned by API, filled in later
+	Content   string
 	Vip       int    `json:"is_vip"`
 }
 
+// Chapters returns all chapters of a book
 func Chapters(id string) ([]*Chapter, error) {
-	url := "http://www.xiangguayuedu.cn/apis/api/BookChapters.php?sid=%s&sign=%s&bookid=%s"
-	r, err := client.Get(fmt.Sprintf(url, viper.GetString("secret.ak"), sign(), id))
-	if err != nil {
-		return nil, err
-	}
+	url := fmt.Sprintf(
+		"http://www.xiangguayuedu.cn/apis/api/BookChapters.php?sid=%s&sign=%s&bookid=%s", 
+		viper.GetString("secret.ak"), sign(), id)
 
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	var resp struct {
-		resp
+	var r struct {
+		oResp
 		Data []struct {
 			Volume   string     `json:"volume_name"`
 			Chapters []*Chapter `json:"chapterlist"`
 		} `json:"data"`
 	}
 
-	if err := decoder.Decode(&resp); err != nil {
-		return nil, err
+	if _, err := client.R().SetResult(&r).Get(url); err != nil {
+		return nil, errors.Wrapf(err, "[ORIGIN.Chapters] send request failed")
+	}
+	
+	if r.Code != 200 {
+		return nil, fmt.Errorf("[ORIGIN.Chapters] invalid status. code: %d, msg: %s", r.Code, r.Msg)
 	}
 
-	if resp.Code != 200 {
-		return nil, fmt.Errorf("code: %d, msg: %s", resp.Code, resp.Msg)
+	
+	if len(r.Data) <= 0 {
+		return nil, errors.New("[ORIGIN.Chapters] no chapters")
 	}
 
-	if len(resp.Data) > 0 {
-		return resp.Data[0].Chapters, nil
+	items := r.Data[0].Chapters
+	for _, item := range items {
+		c, err := content(id, item.ID);
+		if err != nil {
+			return nil, errors.Wrapf(err, "[ORIGIN.Chapters.Content] get chapter %s content failed", item.ID)
+		}
+
+		item.Content = c
 	}
 
-	return nil, errors.New("no chapters")
+	return items, nil
 }
-
-// {
-//   "code": 200,
-//   "data": {
-//     "content": "　　“以前他还会脸红呢。”罗娜感叹道，“青春一去不复返啊。”\n　　吴泽冷笑了一声。\n　　两周后，段宇成出发参加田径大奖赛第一站。"
-//   },
-//   "msg": "Success"
-// }
 
 type CInfo struct {
 	ID      string `json:"id"`
@@ -180,33 +149,84 @@ type CInfo struct {
 	Content string `json:"content"`
 }
 
-func ChapterInfo(bid string, cid string) (*CInfo, error) {
-	url := "http://www.xiangguayuedu.cn/apis/api/BookChapterInfo.php?sid=%s&sign=%s&bookid=%s&chapterid=%s"
-	r, err := client.Get(fmt.Sprintf(url, viper.GetString("secret.ak"), sign(), bid, cid))
-	if err != nil {
-		return nil, err
-	}
-
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	var resp struct {
-		resp
+// ChapterContent returns chapter content
+func content(bid string, cid string) (string, error) {
+	var r struct {
+		oResp
 		Data struct {
 			Content string `json:"content"`
 		} `json:"data"`
 	}
 
-	if err := decoder.Decode(&resp); err != nil {
-		return nil, err
+	url := fmt.Sprintf(
+		"http://www.xiangguayuedu.cn/apis/api/BookChapterInfo.php?sid=%s&sign=%s&bookid=%s&chapterid=%s", 
+		viper.GetString("secret.ak"), sign(), bid, cid)
+	if _, err := client.R().SetResult(&r).Get(url); err != nil {
+		return "", errors.Wrapf(err, "[ORIGIN.Content] send request failed")
+	}
+	
+	if r.Code != 200 {
+		return "", fmt.Errorf("[ORIGIN.Content] code: %d, msg: %s", r.Code, r.Msg)
 	}
 
-	if resp.Code != 200 {
-		return nil, fmt.Errorf("code: %d, msg: %s", resp.Code, resp.Msg)
+	return r.Data.Content, nil
+}
+
+// has book record
+func HasBookRecord(id string) (bool, error) {
+	var has bool
+	return has, db.MySQL.Get(&has, 
+		"select count(1) from yw_books where book_id=?", cast.ToInt(id))
+}
+
+func HasChapterRecord(id string, cid string) (bool, error) {
+	var has bool
+	return has, db.MySQL.Get(&has, 
+		"select count(1) from yw_chapters where book_id=? and chapter_id=?", cast.ToInt64(id), cast.ToInt64(cid))
+}
+
+func PutBookRecord(b db.YWBook) error {
+	tx := db.MySQL.MustBegin()
+	defer tx.Rollback()
+	if _, err := tx.NamedExec(`
+		insert into yw_books (book_id, name, status, yw_book_id, yw_cp_id, book_updated_at)
+		values (:book_id, :name, :yw_book_id, :yw_cp_id, :status, :book_updated_at)
+	`, b); err != nil {
+		return errors.Wrapf(err, "[ORIGIN.PutBookRecord] insert book record failed")
 	}
 
-	return &CInfo{
-		Content: resp.Data.Content,
-		ID:      cid,
-		BID:     bid,
-	}, nil
+	return tx.Commit()
+}
+
+func PutChapterRecord(c *db.YWChapter) (bool, error) {
+	tx := db.MySQL.MustBegin()
+	defer tx.Rollback()
+	if _, err := tx.NamedExec(`
+		insert into yw_chapters (book_id, chapter_id, name, yw_cp_id, yw_book_id, yw_chapter_id, status, chapter_updated_at)
+		values (:book_id, :chapter_id, :name, :yw_cp_id, :yw_book_id, :yw_chapter_id, :status, :chapter_updated_at)
+	`, c); err != nil {
+		return false, errors.Wrapf(err, "[ORIGIN.PutChapterRecord] insert chapter record failed")
+	}
+
+	return true,tx.Commit()
+}
+
+func UpdateBookStatus(b string, status int) error {
+	tx := db.MySQL.MustBegin()
+	defer tx.Rollback()
+	if _, err := tx.Exec("update yw_books set status=? where book_id=?", status, b); err != nil {
+		return errors.Wrapf(err, "[ORIGIN.UpdateBookStatus] update book status failed")
+	}
+
+	return tx.Commit()
+}
+
+func UpdateChapterStatus(b string, c string, status int) error {
+	tx := db.MySQL.MustBegin()
+	defer tx.Rollback()
+	if _, err := tx.Exec("update yw_chapters set status=? where book_id=? and chapter_id=?", status, b, c); err != nil {
+		return errors.Wrapf(err, "[ORIGIN.UpdateChapterStatus] update chapterstatus failed")
+	}
+
+	return tx.Commit()
 }

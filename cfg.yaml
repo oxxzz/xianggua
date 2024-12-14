@@ -1,7 +1,8 @@
-ips: [127.0.0.1, 111.111.111.111]
 debug: true
-listen: 8080
+enableAPI: true
+listen: ":8001"
 worker: 10
+interval: 10m
 
 mysql:
   dsn: book:zMpGFJpbaXcWdnze@tcp(127.0.0.1:3306)/book?charset=utf8mb4&parseTime=True&loc=Local
